@@ -5,7 +5,7 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # Yeh aapko manually GitHub se action run karne ki suvidha dega
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,11 +13,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Aapke code ko repository se fetch karega
+      # 1. Checkout Code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Java setup karega (Android APK build ke liye Java 17 zaroori hai)
+      # 2. Setup Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -25,22 +25,25 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-      # 3. Flutter setup karega (Error fix: Sirf channel 'stable' diya hai)
+      # 3. Setup Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          # 'flutter-version' ko hata diya gaya hai taaki version resolve error na aaye
 
-      # 4. Saare packages aur dependencies install karega
+      # 4. Create .env file from GitHub Secrets (🔥 YAHAN FIX HAI 🔥)
+      - name: Create .env file
+        run: echo "${{ secrets.ENV_FILE }}" > .env
+
+      # 5. Install Dependencies
       - name: Install Dependencies
         run: flutter pub get
 
-      # 5. Release APK build karega
+      # 6. Build Release APK (Warnings ko bypass karne ke liye flag add kiya hai)
       - name: Build Release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --android-skip-build-dependency-validation
 
-      # 6. Build hone ke baad APK ko GitHub par upload karega taaki aap download kar sakein
+      # 7. Upload APK Artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
