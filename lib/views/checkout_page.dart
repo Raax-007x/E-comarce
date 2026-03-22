@@ -18,59 +18,144 @@ class CheckoutPage extends StatefulWidget {
 }
 
 class _CheckoutPageState extends State<CheckoutPage> {
-  TextEditingController _couponController = TextEditingController();
+  final TextEditingController _couponController = TextEditingController();
 
   int discount = 0;
-  int toPay = 0;
   String discountText = "";
+  bool paymentSuccess = false;
+  Map<String, dynamic> dataOfOrder = {};
 
-  bool paymentSuccess=false;
-  Map<String,dynamic> dataOfOrder={};
-
-    discountCalculator(int disPercent, int totalCost) {
-    discount = (disPercent * totalCost) ~/ 100;
-  setState(() {});
+  void discountCalculator(int disPercent, int totalCost) {
+    setState(() {
+      discount = (disPercent * totalCost) ~/ 100;
+    });
   }
 
   Future<void> initPaymentSheet(int cost) async {
     try {
       final user = Provider.of<UserProvider>(context, listen: false);
-      // 1. create payment intent on the server
-      final data = await createPaymentIntent(name: user.name,address: user.address,
-      amount:  (cost*100).toString());
+      
+      // 1. Create payment intent on the server
+      final data = await createPaymentIntent(
+        name: user.name,
+        address: user.address,
+        amount: (cost * 100).toString(), // Convert to paise
+      );
 
-      // 2. initialize the payment sheet
-     await Stripe.instance.initPaymentSheet(
+      // 🔥 SAFE CHECK: Agar data null aaya (jaise key na hone par), toh wahi ruk jao
+      if (data == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Error: Could not process payment. Check configuration.')),
+          );
+        }
+        return; 
+      }
+
+      // 2. Initialize the payment sheet
+      await Stripe.instance.initPaymentSheet(
         paymentSheetParameters: SetupPaymentSheetParameters(
-          // Set to true for custom flow
           customFlow: false,
-          // Main params
-          merchantDisplayName: 'Flutter Stripe Store Demo',
+          merchantDisplayName: 'E-Commerce Store',
           paymentIntentClientSecret: data['client_secret'],
-          // Customer keys
-          customerEphemeralKeySecret: data['ephemeralKey'],
-          customerId: data['id'],
-          // Extra options
-          
-          
+          // In variables ko tabhi use karein jab Stripe Dashboard mein Customer API setup ho
+          // customerEphemeralKeySecret: data['ephemeralKey'], 
+          // customerId: data['id'],
           style: ThemeMode.dark,
         ),
       );
-     
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
-      rethrow;
-    }
-}
+      
+      // 3. Present the payment sheet
+      await processPayment(cost);
 
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Payment Sheet Error: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> processPayment(int cost) async {
+    try {
+      // User ko sheet dikhao
+      await Stripe.instance.presentPaymentSheet();
+
+      if (!mounted) return;
+      
+      final cart = Provider.of<CartProvider>(context, listen: false);
+      final user = Provider.of<UserProvider>(context, listen: false);
+      User? currentUser = FirebaseAuth.instance.currentUser;
+      
+      List products = [];
+      for (int i = 0; i < cart.products.length; i++) {
+        products.add({
+          "id": cart.products[i].id,
+          "name": cart.products[i].name,
+          "image": cart.products[i].image,
+          "single_price": cart.products[i].new_price,
+          "total_price": cart.products[i].new_price * cart.carts[i].quantity,
+          "quantity": cart.carts[i].quantity
+        });
+      }
+
+      Map<String, dynamic> orderData = {
+        "user_id": currentUser?.uid ?? "",
+        "name": user.name,
+        "email": user.email,
+        "address": user.address,
+        "phone": user.phone,
+        "discount": discount,
+        "total": cart.totalCost - discount,
+        "products": products,
+        "status": "PAID",
+        "created_at": DateTime.now().millisecondsSinceEpoch
+      };
+
+      dataOfOrder = orderData;
+
+      // Database updates
+      await DbService().createOrder(data: orderData);
+      for (int i = 0; i < cart.products.length; i++) {
+        DbService().reduceQuantity(
+            productId: cart.products[i].id, quantity: cart.carts[i].quantity);
+      }
+      await DbService().emptyCart();
+
+      paymentSuccess = true;
+
+      if (mounted) {
+        Navigator.pop(context); // Close checkout page
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Payment Successful! Order Placed.", style: TextStyle(color: Colors.white)),
+          backgroundColor: Colors.green,
+        ));
+      }
+
+      // Send Mail
+      if (paymentSuccess) {
+         MailService().sendMailFromGmail(user.email, OrdersModel.fromJson(dataOfOrder, ""));
+      }
+
+    } on StripeException catch (e) {
+      debugPrint("Stripe Exception: ${e.error.localizedMessage}");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("Payment Cancelled or Failed: ${e.error.localizedMessage}"),
+          backgroundColor: Colors.redAccent,
+        ));
+      }
+    } catch (e) {
+      debugPrint("General Exception: $e");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(
+        title: const Text(
           "Checkout",
           style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
         ),
@@ -86,231 +171,177 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       "Delivery Details",
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
                     ),
+                    const SizedBox(height: 10),
                     Container(
-                       padding: EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade200,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Row(children: [
-                         SizedBox(
-                           width: MediaQuery.of(context).size.width * .65,
-                           child: Column(
-                               crossAxisAlignment: CrossAxisAlignment.start,
-                             children: [
-                               Text(userData.name,style: TextStyle(
-                                              fontSize: 16,
-                                              fontWeight: FontWeight.w500),),
-                           Text(userData.email),       
-                           Text(userData.address),       
-                           Text(userData.phone),       
-                             ],
-                           ),
-                         ),
-                         Spacer(),
-                         IconButton(onPressed: (){
-                          Navigator.pushNamed(context,"/update_profile");
-                         }, icon: Icon(Icons.edit_outlined))   
-                              ],),
-                    ),
-                       SizedBox(
-                          height: 20,
-                        ),
-                        Text("Have a coupon?"),
-                         Row(
-                          children: [
-                            SizedBox(
-                              width: 200,
-                              child: TextFormField(
-                                textCapitalization: TextCapitalization
-                                    .characters, // capitalize first letter of each word
-                                controller: _couponController,
-                                decoration: InputDecoration(
-                                  labelText: "Coupon Code",
-                                  hintText: "Enter Coupon for extra discount",
-                                  border: InputBorder.none,
-                                  filled: true,
-                                  fillColor: Colors.grey.shade200,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  userData.name,
+                                  style: const TextStyle(
+                                      fontSize: 16, fontWeight: FontWeight.w500),
                                 ),
-                              ),
+                                const SizedBox(height: 4),
+                                Text(userData.email),
+                                Text(userData.address),
+                                Text(userData.phone),
+                              ],
                             ),
-                            TextButton(
-                                onPressed: () async {
-                                  QuerySnapshot querySnapshot =
-                                      await DbService().verifyDiscount(
-                                          code: _couponController.text
-                                              .toUpperCase());
-
-                                  if (querySnapshot.docs.isNotEmpty) {
-                                    QueryDocumentSnapshot doc =
-                                        querySnapshot.docs.first;
-                                    String code = doc.get('code');
-                                    int percent = doc.get('discount');
-
-                                    // access other fields as needed
-                                    print('Discount code: $code');
-                                    discountText =
-                                        "a discount of $percent% has been applied.";
-                                    discountCalculator(
-                                        percent, cartData.totalCost);
-                                  } else {
-                                    print('No discount code found');
-                                    discountText = "No discount code found";
-                                  }
-                                  setState(() {});
-                                },
-                                child: Text("Apply"))
-                          ],
-                        ),
-                          SizedBox(
-                          height: 8,
-                        ),
-                        discountText == "" ? Container() : Text(discountText),
-                        SizedBox(
-                          height: 10,
-                        ),
-                        Divider(),
-                        SizedBox(
-                          height: 10,
-                        ),
-                          Text(
-                          "Total Quantity of Products: ${cartData.totalQuantity}",
-                          style: TextStyle(
-                            fontSize: 16,
+                          ),
+                          IconButton(
+                            onPressed: () {
+                              Navigator.pushNamed(context, "/update_profile");
+                            },
+                            icon: const Icon(Icons.edit_outlined),
+                          )
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text("Have a coupon?", style: TextStyle(fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            textCapitalization: TextCapitalization.characters,
+                            controller: _couponController,
+                            decoration: InputDecoration(
+                              labelText: "Coupon Code",
+                              hintText: "Enter Coupon",
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: BorderSide.none,
+                              ),
+                              filled: true,
+                              fillColor: Colors.grey.shade200,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                            ),
                           ),
                         ),
-                        Text(
-                          "Sub Total: ₹ ${cartData.totalCost}",
-                          style: TextStyle(
-                            fontSize: 16,
-                          ),
-                        ),
-                        Divider(),
-                        Text(
-                          "Extra Discount: - ₹ $discount",
-                          style: TextStyle(fontSize: 16),
-                        ),
-                        Divider(),
-                        Text(
-                          "Total Payable: ₹ ${cartData.totalCost - discount}",
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w500),
-                        ),
-                     
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: () async {
+                            if (_couponController.text.isEmpty) return;
+                            
+                            QuerySnapshot querySnapshot = await DbService()
+                                .verifyDiscount(code: _couponController.text.toUpperCase());
+
+                            if (querySnapshot.docs.isNotEmpty) {
+                              QueryDocumentSnapshot doc = querySnapshot.docs.first;
+                              int percent = doc.get('discount');
+
+                              setState(() {
+                                discountText = "A discount of $percent% has been applied.";
+                              });
+                              discountCalculator(percent, cartData.totalCost);
+                            } else {
+                              setState(() {
+                                discountText = "Invalid coupon code";
+                                discount = 0;
+                              });
+                            }
+                          },
+                          child: const Text("Apply"),
+                        )
+                      ],
+                    ),
+                    if (discountText.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        discountText,
+                        style: TextStyle(
+                            color: discount > 0 ? Colors.green : Colors.red,
+                            fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                    const SizedBox(height: 20),
+                    const Divider(),
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Total Items:", style: TextStyle(fontSize: 16)),
+                        Text("${cartData.totalQuantity}", style: const TextStyle(fontSize: 16)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Sub Total:", style: TextStyle(fontSize: 16)),
+                        Text("₹ ${cartData.totalCost}", style: const TextStyle(fontSize: 16)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Discount:", style: TextStyle(fontSize: 16, color: Colors.green)),
+                        Text("- ₹ $discount", style: const TextStyle(fontSize: 16, color: Colors.green)),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const Divider(),
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Total Payable:",
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Text("₹ ${cartData.totalCost - discount}",
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
                   ],
                 ),
               );
             },
           ),
         ),
-        
       ),
       bottomNavigationBar: Container(
-         height: 60,
-        padding: const EdgeInsets.all(8.0),
-        child: ElevatedButton(child: Text("Procced to pay"), onPressed: ()async{
-          final user = Provider.of<UserProvider>(context, listen: false);
-            if (user.address == "" ||
-                user.phone == "" ||
-                user.name == "" ||
-                user.email == "") {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text("Please fill your delivery details.")));
+        height: 70,
+        padding: const EdgeInsets.all(12.0),
+        child: ElevatedButton(
+          onPressed: () async {
+            final user = Provider.of<UserProvider>(context, listen: false);
+            final cart = Provider.of<CartProvider>(context, listen: false);
+
+            if (user.address.isEmpty || user.phone.isEmpty || user.name.isEmpty || user.email.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Please complete your delivery details first.")));
               return;
             }
 
-            await initPaymentSheet(
-                Provider.of<CartProvider>(context, listen: false).totalCost -
-                    discount);
+            if (cart.totalCost <= 0) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Cart is empty.")));
+              return;
+            }
 
-try{
-  await Stripe.instance.presentPaymentSheet();
-
-  final cart = Provider.of<CartProvider>(context, listen: false);
-
-              User? currentUser = FirebaseAuth.instance.currentUser;
-              List products = [];
-
-              for (int i = 0; i < cart.products.length; i++) {
-                products.add({
-                  "id": cart.products[i].id,
-                  "name": cart.products[i].name,
-                  "image": cart.products[i].image,
-                  "single_price": cart.products[i].new_price,
-                  "total_price":
-                      cart.products[i].new_price * cart.carts[i].quantity,
-                  "quantity": cart.carts[i].quantity
-                });
-              }
-
-              // ORDER STATUS
-              // PAID - paid money by user
-              // SHIPPED - item shipped
-              // CANCELLED - item cancelled
-              // DELIVERED - order delivered
-
-              Map<String, dynamic> orderData = {
-                "user_id": currentUser!.uid,
-                "name": user.name,
-                "email": user.email,
-                "address": user.address,
-                "phone": user.phone,
-                "discount": discount,
-                "total": cart.totalCost - discount,
-                "products": products,
-                "status": "PAID",
-                "created_at": DateTime.now().millisecondsSinceEpoch
-              };
-
-  dataOfOrder=orderData;
-
-
-  // creating new order
- await DbService().createOrder(data: orderData);
-
-//  reduce the quantity of product on firestore
-   for (int i = 0; i < cart.products.length; i++) {
-    DbService().reduceQuantity(productId: cart.products[i].id, quantity: cart.carts[i].quantity);
-   }
-
-  // clear the cart for the user
- await DbService().emptyCart();
-
-  paymentSuccess=true;
-
-//  close the checkout page
-Navigator.pop(context);
-
-     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(
-                  "Payment Done",
-                  style: TextStyle(color: Colors.white),
-                ),
-                backgroundColor: Colors.green,
-              ));
-
-}catch(e){
-     print("payment sheet error : $e");
-              print("payment sheet failed");
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(
-                  "Payment Failed",
-                  style: TextStyle(color: Colors.white),
-                ),
-                backgroundColor: Colors.redAccent,
-              ));
-}
-
-if(paymentSuccess){
-  MailService().sendMailFromGmail(user.email, OrdersModel.fromJson(dataOfOrder, ""));
-}
-
-
-        },style: ElevatedButton.styleFrom(backgroundColor: Colors.blue,foregroundColor: Colors.white),),
+            // Payment Process start karo
+            await initPaymentSheet(cart.totalCost - discount);
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          child: const Text("Proceed to Pay", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
       ),
     );
   }
