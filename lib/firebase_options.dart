@@ -5,15 +5,6 @@ import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
 /// Default [FirebaseOptions] for use with your Firebase apps.
-///
-/// Example:
-/// ```dart
-/// import 'firebase_options.dart';
-/// // ...
-/// await Firebase.initializeApp(
-///   options: DefaultFirebaseOptions.currentPlatform,
-/// );
-/// ```
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
@@ -49,14 +40,17 @@ class DefaultFirebaseOptions {
     }
   }
 
+  // ✅ Updated with your NEW Firebase Project Data (bgmiuc-74295)
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBEQrg45D7XgjW0ouJdusG8xNM--SbF7lY',
-    appId: '1:705724924854:android:73f24164b273fcf8c4b717',
-    messagingSenderId: '705724924854',
-    projectId: 'contacts-app-b5a05',
-    storageBucket: 'contacts-app-b5a05.appspot.com',
+    apiKey: 'AIzaSyDN_q_BcUTvSXkILqKIvO_FhYJ4jHSC-HY',
+    appId: '1:225862888805:android:22311a25c8512dd56f058c', // Used the ID for com.sell
+    messagingSenderId: '225862888805',
+    projectId: 'bgmiuc-74295',
+    storageBucket: 'bgmiuc-74295.firebasestorage.app',
   );
 
+  // Note: iOS data kept from previous file as it wasn't in your new JSON. 
+  // If you need to build for iOS later, run: flutterfire configure
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBSmUcRo7dTnvFvPtUsZWGr_qbszANhtWA',
     appId: '1:705724924854:ios:a4d5856f75e2f6ccc4b717',
@@ -67,5 +61,4 @@ class DefaultFirebaseOptions {
     iosClientId: '705724924854-tvhiprg0kg1lvc77j8l8r3d8rr5va3bm.apps.googleusercontent.com',
     iosBundleId: 'com.example.ecommerceApp',
   );
-
 }
