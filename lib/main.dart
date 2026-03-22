@@ -24,10 +24,12 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // 1. Firebase Initialize
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    // 1. Firebase Initialize (Duplicate App Error Fix)
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    }
 
     // 2. Load .env file
     await dotenv.load(fileName: ".env");
@@ -38,11 +40,11 @@ void main() async {
     Stripe.urlScheme = 'flutterstripe';
     await Stripe.instance.applySettings();
 
-    // Agar sab theek raha, toh app run hoga
+    // Agar sab theek raha, toh main app run hoga
     runApp(const MyApp());
     
   } catch (e) {
-    // 🔥 AGAR KOI ERROR AATA HAI TOH BLACK SCREEN KI JAGAH YAHAN ERROR DIKHEGA 🔥
+    // 🔥 Black Screen aane ki jagah yahan saaf error dikhega 🔥
     debugPrint("App Initialization Error: $e");
     runApp(MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -91,7 +93,7 @@ class MyApp extends StatelessWidget {
           "/cart": (context) => const CartPage(),
           "/checkout": (context) => const CheckoutPage(),
           "/orders": (context) => const OrdersPage(),
-          "/view_order": (context) => const ViewOrder(), // Assuming ViewOrder exists
+          "/view_order": (context) => const ViewOrder(), 
         },
       ),
     );
@@ -114,7 +116,7 @@ class _CheckUserState extends State<CheckUser> {
 
   void _checkLoginStatus() async {
     bool isLoggedIn = await AuthService().isLoggedIn();
-    if (mounted) { // mounted check zaroori hai error se bachne ke liye
+    if (mounted) { 
       if (isLoggedIn) {
         Navigator.pushReplacementNamed(context, "/home");
       } else {
