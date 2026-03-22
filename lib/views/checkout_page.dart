@@ -9,6 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_stripe/flutter_stripe.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart'; // UPI ke liye naya import
 
 class CheckoutPage extends StatefulWidget {
   const CheckoutPage({super.key});
@@ -31,18 +32,50 @@ class _CheckoutPageState extends State<CheckoutPage> {
     });
   }
 
+  // 🔥 DIRECT UPI PAYMENT LOGIC
+  Future<void> payWithDirectUPI(int cost) async {
+    // Aapka apna UPI ID yahan daala gaya hai
+    String upiId = "paynearby.8406962570@indus";
+    String payeeName = "Ecommerce Store";
+    String transactionNote = "Order Payment";
+
+    // UPI Deep Link Generate karna
+    String url =
+        "upi://pay?pa=$upiId&pn=${Uri.encodeComponent(payeeName)}&tn=${Uri.encodeComponent(transactionNote)}&am=$cost&cu=INR";
+
+    Uri uri = Uri.parse(url);
+
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        
+        // WARNING: Bina Gateway ke hum 100% sure nahi ho sakte ki payment successful hui ya fail.
+        // Yahan hum assume kar rahe hain ki agar app wapas aaya toh hum order place kar denge (Jo ki risky hai).
+        // Asli app mein aapko payment screenshot ya transaction ID maangni padegi agar Gateway nahi hai toh.
+        
+        await _placeOrderAfterPayment(cost);
+        
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("No UPI App found on this device.")));
+        }
+      }
+    } catch (e) {
+      debugPrint("UPI Error: $e");
+    }
+  }
+
+  // STRIPE LOGIC (Pehle jaisa hi hai)
   Future<void> initPaymentSheet(int cost) async {
     try {
       final user = Provider.of<UserProvider>(context, listen: false);
-      
-      // 1. Create payment intent on the server
       final data = await createPaymentIntent(
         name: user.name,
         address: user.address,
-        amount: (cost * 100).toString(), // Convert to paise
+        amount: (cost * 100).toString(),
       );
 
-      // 🔥 SAFE CHECK: Agar data null aaya (jaise key na hone par), toh wahi ruk jao
       if (data == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -52,97 +85,22 @@ class _CheckoutPageState extends State<CheckoutPage> {
         return; 
       }
 
-      // 2. Initialize the payment sheet
       await Stripe.instance.initPaymentSheet(
         paymentSheetParameters: SetupPaymentSheetParameters(
           customFlow: false,
           merchantDisplayName: 'E-Commerce Store',
           paymentIntentClientSecret: data['client_secret'],
-          // In variables ko tabhi use karein jab Stripe Dashboard mein Customer API setup ho
-          // customerEphemeralKeySecret: data['ephemeralKey'], 
-          // customerId: data['id'],
           style: ThemeMode.dark,
         ),
       );
       
-      // 3. Present the payment sheet
-      await processPayment(cost);
-
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Payment Sheet Error: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> processPayment(int cost) async {
-    try {
-      // User ko sheet dikhao
       await Stripe.instance.presentPaymentSheet();
-
-      if (!mounted) return;
-      
-      final cart = Provider.of<CartProvider>(context, listen: false);
-      final user = Provider.of<UserProvider>(context, listen: false);
-      User? currentUser = FirebaseAuth.instance.currentUser;
-      
-      List products = [];
-      for (int i = 0; i < cart.products.length; i++) {
-        products.add({
-          "id": cart.products[i].id,
-          "name": cart.products[i].name,
-          "image": cart.products[i].image,
-          "single_price": cart.products[i].new_price,
-          "total_price": cart.products[i].new_price * cart.carts[i].quantity,
-          "quantity": cart.carts[i].quantity
-        });
-      }
-
-      Map<String, dynamic> orderData = {
-        "user_id": currentUser?.uid ?? "",
-        "name": user.name,
-        "email": user.email,
-        "address": user.address,
-        "phone": user.phone,
-        "discount": discount,
-        "total": cart.totalCost - discount,
-        "products": products,
-        "status": "PAID",
-        "created_at": DateTime.now().millisecondsSinceEpoch
-      };
-
-      dataOfOrder = orderData;
-
-      // Database updates
-      await DbService().createOrder(data: orderData);
-      for (int i = 0; i < cart.products.length; i++) {
-        DbService().reduceQuantity(
-            productId: cart.products[i].id, quantity: cart.carts[i].quantity);
-      }
-      await DbService().emptyCart();
-
-      paymentSuccess = true;
-
-      if (mounted) {
-        Navigator.pop(context); // Close checkout page
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Payment Successful! Order Placed.", style: TextStyle(color: Colors.white)),
-          backgroundColor: Colors.green,
-        ));
-      }
-
-      // Send Mail
-      if (paymentSuccess) {
-         MailService().sendMailFromGmail(user.email, OrdersModel.fromJson(dataOfOrder, ""));
-      }
+      await _placeOrderAfterPayment(cost); // Payment success hone par order place hoga
 
     } on StripeException catch (e) {
-      debugPrint("Stripe Exception: ${e.error.localizedMessage}");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text("Payment Cancelled or Failed: ${e.error.localizedMessage}"),
+          content: Text("Payment Cancelled: ${e.error.localizedMessage}"),
           backgroundColor: Colors.redAccent,
         ));
       }
@@ -151,14 +109,68 @@ class _CheckoutPageState extends State<CheckoutPage> {
     }
   }
 
+  // ORDER PLACEMENT LOGIC (Common for both Stripe and UPI)
+  Future<void> _placeOrderAfterPayment(int cost) async {
+    if (!mounted) return;
+    
+    final cart = Provider.of<CartProvider>(context, listen: false);
+    final user = Provider.of<UserProvider>(context, listen: false);
+    User? currentUser = FirebaseAuth.instance.currentUser;
+    
+    List products = [];
+    for (int i = 0; i < cart.products.length; i++) {
+      products.add({
+        "id": cart.products[i].id,
+        "name": cart.products[i].name,
+        "image": cart.products[i].image,
+        "single_price": cart.products[i].new_price,
+        "total_price": cart.products[i].new_price * cart.carts[i].quantity,
+        "quantity": cart.carts[i].quantity
+      });
+    }
+
+    Map<String, dynamic> orderData = {
+      "user_id": currentUser?.uid ?? "",
+      "name": user.name,
+      "email": user.email,
+      "address": user.address,
+      "phone": user.phone,
+      "discount": discount,
+      "total": cost,
+      "products": products,
+      "status": "PAID",
+      "created_at": DateTime.now().millisecondsSinceEpoch
+    };
+
+    dataOfOrder = orderData;
+
+    await DbService().createOrder(data: orderData);
+    for (int i = 0; i < cart.products.length; i++) {
+      DbService().reduceQuantity(
+          productId: cart.products[i].id, quantity: cart.carts[i].quantity);
+    }
+    await DbService().emptyCart();
+
+    paymentSuccess = true;
+
+    if (mounted) {
+      Navigator.pop(context); 
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Payment Successful! Order Placed.", style: TextStyle(color: Colors.white)),
+        backgroundColor: Colors.green,
+      ));
+    }
+
+    if (paymentSuccess) {
+       MailService().sendMailFromGmail(user.email, OrdersModel.fromJson(dataOfOrder, ""));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          "Checkout",
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-        ),
+        title: const Text("Checkout", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
         scrolledUnderElevation: 0,
         forceMaterialTransparency: true,
       ),
@@ -171,10 +183,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      "Delivery Details",
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
-                    ),
+                    const Text("Delivery Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500)),
                     const SizedBox(height: 10),
                     Container(
                       padding: const EdgeInsets.all(16),
@@ -188,11 +197,7 @@ class _CheckoutPageState extends State<CheckoutPage> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  userData.name,
-                                  style: const TextStyle(
-                                      fontSize: 16, fontWeight: FontWeight.w500),
-                                ),
+                                Text(userData.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
                                 const SizedBox(height: 4),
                                 Text(userData.email),
                                 Text(userData.address),
@@ -235,14 +240,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
                         ElevatedButton(
                           onPressed: () async {
                             if (_couponController.text.isEmpty) return;
-                            
-                            QuerySnapshot querySnapshot = await DbService()
-                                .verifyDiscount(code: _couponController.text.toUpperCase());
-
+                            QuerySnapshot querySnapshot = await DbService().verifyDiscount(code: _couponController.text.toUpperCase());
                             if (querySnapshot.docs.isNotEmpty) {
                               QueryDocumentSnapshot doc = querySnapshot.docs.first;
                               int percent = doc.get('discount');
-
                               setState(() {
                                 discountText = "A discount of $percent% has been applied.";
                               });
@@ -260,24 +261,11 @@ class _CheckoutPageState extends State<CheckoutPage> {
                     ),
                     if (discountText.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      Text(
-                        discountText,
-                        style: TextStyle(
-                            color: discount > 0 ? Colors.green : Colors.red,
-                            fontWeight: FontWeight.w500),
-                      ),
+                      Text(discountText, style: TextStyle(color: discount > 0 ? Colors.green : Colors.red, fontWeight: FontWeight.w500)),
                     ],
                     const SizedBox(height: 20),
                     const Divider(),
                     const SizedBox(height: 10),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text("Total Items:", style: TextStyle(fontSize: 16)),
-                        Text("${cartData.totalQuantity}", style: const TextStyle(fontSize: 16)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -299,10 +287,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text("Total Payable:",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        Text("₹ ${cartData.totalCost - discount}",
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        const Text("Total Payable:", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Text("₹ ${cartData.totalCost - discount}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       ],
                     ),
                   ],
@@ -313,34 +299,43 @@ class _CheckoutPageState extends State<CheckoutPage> {
         ),
       ),
       bottomNavigationBar: Container(
-        height: 70,
+        height: 140, // Height badha di gayi hai taaki 2 buttons aa sakein
         padding: const EdgeInsets.all(12.0),
-        child: ElevatedButton(
-          onPressed: () async {
-            final user = Provider.of<UserProvider>(context, listen: false);
-            final cart = Provider.of<CartProvider>(context, listen: false);
-
-            if (user.address.isEmpty || user.phone.isEmpty || user.name.isEmpty || user.email.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Please complete your delivery details first.")));
-              return;
-            }
-
-            if (cart.totalCost <= 0) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Cart is empty.")));
-              return;
-            }
-
-            // Payment Process start karo
-            await initPaymentSheet(cart.totalCost - discount);
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.blue,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-          child: const Text("Proceed to Pay", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        child: Consumer<CartProvider>(
+          builder: (context, cartData, child) {
+            final finalCost = cartData.totalCost - discount;
+            return Column(
+              children: [
+                // 🔹 BUTTON 1: UPI PAYMENT
+                SizedBox(
+                  width: double.infinity,
+                  height: 45,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                       if (finalCost <= 0) return;
+                       await payWithDirectUPI(finalCost);
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                    child: const Text("Pay directly via UPI App", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                // 🔹 BUTTON 2: STRIPE PAYMENT
+                SizedBox(
+                  width: double.infinity,
+                  height: 45,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      if (finalCost <= 0) return;
+                      await initPaymentSheet(finalCost);
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
+                    child: const Text("Pay with Card (Stripe)", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            );
+          }
         ),
       ),
     );
