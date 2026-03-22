@@ -20,31 +20,40 @@ import 'package:flutter_stripe/flutter_stripe.dart';
 import 'package:provider/provider.dart';
 
 void main() async {
-  // Flutter bindings ko initialize karna zaroori hai
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // 1. Firebase Initialize (Duplicate App Error Fix)
+    // 1. Firebase Initialize
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
     }
 
-    // 2. Load .env file
-    await dotenv.load(fileName: ".env");
+    // 2. Load .env file (try-catch ke andar taaki crash na ho)
+    try {
+      await dotenv.load(fileName: ".env");
+    } catch (e) {
+      debugPrint("⚠️ .env file nahi mili. Koi baat nahi, app aage badh raha hai.");
+    }
 
-    // 3. Stripe Setup
-    Stripe.publishableKey = dotenv.env["STRIPE_PUBLISH_KEY"] ?? '';
-    Stripe.merchantIdentifier = 'merchant.flutter.stripe.test';
-    Stripe.urlScheme = 'flutterstripe';
-    await Stripe.instance.applySettings();
+    // 3. Stripe Setup (Safety Check ke sath)
+    String stripeKey = dotenv.env["STRIPE_PUBLISH_KEY"] ?? "";
+    
+    // Check karega ki key khali toh nahi hai na
+    if (stripeKey.isNotEmpty) {
+      Stripe.publishableKey = stripeKey;
+      Stripe.merchantIdentifier = 'merchant.flutter.stripe.test';
+      Stripe.urlScheme = 'flutterstripe';
+      await Stripe.instance.applySettings();
+    } else {
+      debugPrint("⚠️ Stripe Key khali hai ya galat hai. Stripe abhi ke liye disable kar diya gaya hai.");
+    }
 
-    // Agar sab theek raha, toh main app run hoga
+    // Agar sab theek raha, toh app run hoga
     runApp(const MyApp());
     
   } catch (e) {
-    // 🔥 Black Screen aane ki jagah yahan saaf error dikhega 🔥
     debugPrint("App Initialization Error: $e");
     runApp(MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -53,7 +62,7 @@ void main() async {
           child: Padding(
             padding: const EdgeInsets.all(20.0),
             child: Text(
-              "App Start Error:\n\n$e\n\n(Check if .env file exists in your project)",
+              "App Start Error:\n\n$e",
               style: const TextStyle(color: Colors.red, fontSize: 16),
               textAlign: TextAlign.center,
             ),
