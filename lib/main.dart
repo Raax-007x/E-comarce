@@ -39,7 +39,7 @@ void main() async {
 
     // 3. Stripe Setup (Safety Check ke sath)
     String stripeKey = dotenv.env["STRIPE_PUBLISH_KEY"] ?? "";
-    
+
     // Check karega ki key khali toh nahi hai na
     if (stripeKey.isNotEmpty) {
       Stripe.publishableKey = stripeKey;
@@ -52,7 +52,7 @@ void main() async {
 
     // Agar sab theek raha, toh app run hoga
     runApp(const MyApp());
-    
+
   } catch (e) {
     debugPrint("App Initialization Error: $e");
     runApp(MaterialApp(
@@ -86,10 +86,44 @@ class MyApp extends StatelessWidget {
       child: MaterialApp(
         title: 'eCommerce App',
         debugShowCheckedModeBanner: false,
+        
+        // 🔥 FORCE DARK THEME
+        themeMode: ThemeMode.dark, 
+        
+        // 🌑 DARK THEME CONFIGURATION (iOS & Android friendly)
+        darkTheme: ThemeData(
+          brightness: Brightness.dark,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.blue, 
+            brightness: Brightness.dark,
+          ),
+          useMaterial3: true,
+          scaffoldBackgroundColor: const Color(0xFF121212), // Premium Dark look
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF121212),
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            centerTitle: true,
+          ),
+          elevatedButtonTheme: ElevatedButtonThemeData(
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ),
+
+        // ☀️ LIGHT THEME CONFIGURATION (Agar user light mode chahe)
         theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+          brightness: Brightness.light,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.blue, 
+            brightness: Brightness.light,
+          ),
           useMaterial3: true,
         ),
+
         routes: {
           "/": (context) => const CheckUser(),
           "/login": (context) => const LoginPage(),
