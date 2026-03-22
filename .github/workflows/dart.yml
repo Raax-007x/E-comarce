@@ -1,33 +1,48 @@
-name: Build Flutter APK
+name: Build Android APK
 
 on:
   push:
-    branches:
-      - main   # Trigger the action on the 'main' branch (change if you're using a different branch)
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Yeh aapko manually GitHub se action run karne ki suvidha dega
 
 jobs:
   build:
+    name: Build APK
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v2
+      # 1. Aapke code ko repository se fetch karega
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Set up Flutter (latest stable version)
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: 'stable'   # 'stable' will automatically use the latest Flutter version
+      # 2. Java setup karega (Android APK build ke liye Java 17 zaroori hai)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
 
-    - name: Install dependencies
-      run: flutter pub get
+      # 3. Flutter setup karega (Error fix: Sirf channel 'stable' diya hai)
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          # 'flutter-version' ko hata diya gaya hai taaki version resolve error na aaye
 
-    - name: Build APK
-      run: flutter build apk --release
+      # 4. Saare packages aur dependencies install karega
+      - name: Install Dependencies
+        run: flutter pub get
 
-    - name: Upload APK to GitHub releases
-      uses: softprops/action-gh-release@v1
-      with:
-        files: build/app/outputs/flutter-apk/app-release.apk
+      # 5. Release APK build karega
+      - name: Build Release APK
+        run: flutter build apk --release
 
-    - name: Clean up
-      run: flutter clean
+      # 6. Build hone ke baad APK ko GitHub par upload karega taaki aap download kar sakein
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecommerce_app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
